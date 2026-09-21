@@ -1,0 +1,18 @@
+# секреты и локальные данные
+.env
+*.db
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+.venv/
+
+# IDE и ОС
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

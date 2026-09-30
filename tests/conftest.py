@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -20,3 +22,10 @@ def created_games():
     yield game_ids
     for game_id in game_ids:
         remove_game(game_id)
+
+
+@pytest.fixture
+def game(api, created_games):
+    body = api.post("/game").json()
+    created_games.append(uuid.UUID(body["session_id"]))
+    return body

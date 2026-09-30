@@ -6,12 +6,12 @@ from pydantic import BaseModel
 
 from battleship.placement import PlacementError, generate_fleet, to_index
 from battleship.storage import (
+    close_game,
     game_status,
     hit_own_fleet,
     load_ships,
-    load_shots,
     save_new_game,
-    save_shot,
+    save_next_shot,
     save_shot_result,
 )
 from battleship.targeting import choose_shot
@@ -48,6 +48,10 @@ class ShotResultOut(BaseModel):
 
 class Accepted(BaseModel):
     status: Literal["accepted"]
+
+
+class Closed(BaseModel):
+    status: Literal["closed"]
 
 
 def open_game(session_id):
@@ -98,12 +102,10 @@ def opponent_shot(session_id: str, body: CoordinateIn):
 )
 def make_shot(session_id: str):
     game_id = open_game(session_id)
-    history = load_shots(game_id)
-    if any(result is None for _, result in history):
+    coordinate = save_next_shot(game_id, choose_shot)
+    if coordinate is None:
         raise HTTPException(status_code=409, detail="Previous shot has no result yet")
 
-    coordinate = choose_shot(history)
-    save_shot(game_id, coordinate)
     return CoordinateOut(coordinate=coordinate)
 
 
@@ -118,3 +120,23 @@ def accept_shot_result(session_id: str, body: ShotResultIn):
         raise HTTPException(status_code=409, detail="No shot is waiting for a result")
 
     return Accepted(status="accepted")
+
+
+@router.post(
+    "/game/{session_id}/close",
+    response_model=Closed,
+    responses={400: {"description": "Session is closed already"}, 404: {"description": "Session not found"}},
+)
+def close_session(session_id: str):
+    try:
+        game_id = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    closing = close_game(game_id)
+    if closing == "unknown":
+        raise HTTPException(status_code=404, detail="Session not found")
+    if closing == "closed already":
+        raise HTTPException(status_code=400, detail="Session is closed already")
+
+    return Closed(status="closed")

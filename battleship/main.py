@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from battleship.routes import router
+from battleship.storage import SessionFinished
 
 app = FastAPI(title="Battleship game service")
 
@@ -13,6 +14,11 @@ async def catch_unexpected_errors(request: Request, call_next):
         return await call_next(request)
     except Exception:
         return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+
+
+@app.exception_handler(SessionFinished)
+async def session_finished(request: Request, exc: SessionFinished):
+    return JSONResponse(status_code=410, content={"detail": "Session is finished"})
 
 
 @app.exception_handler(RequestValidationError)

@@ -6,6 +6,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Uuid,
     create_engine,
     delete,
+    event,
     func,
     insert,
     select,
@@ -21,7 +23,16 @@ from sqlalchemy import (
 
 from battleship.settings import settings
 
-engine = create_engine(settings.database_url)
+if settings.database_url.startswith("sqlite"):
+    engine = create_engine(settings.database_url, connect_args={"timeout": 30})
+
+    @event.listens_for(engine, "begin")
+    def begin_immediately(conn):
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+
+else:
+    engine = create_engine(settings.database_url, pool_size=20, max_overflow=10, pool_pre_ping=True)
+
 metadata = MetaData()
 
 games = Table(
@@ -50,6 +61,9 @@ shots = Table(
     Column("cell", String(3), nullable=False),
     Column("result", String(6)),
 )
+
+Index("ix_ship_cells_game_id_cell", ship_cells.c.game_id, ship_cells.c.cell)
+Index("ix_shots_game_id", shots.c.game_id)
 
 
 def save_new_game(ships):
@@ -84,8 +98,15 @@ def game_status(game_id):
         return conn.execute(select(games.c.status).where(games.c.id == game_id)).scalar()
 
 
+def lock_game(conn, game_id):
+    """Занимает сессию до конца транзакции: параллельные запросы одной партии идут по очереди."""
+    query = select(games.c.status).where(games.c.id == game_id).with_for_update()
+    return conn.execute(query).scalar()
+
+
 def hit_own_fleet(game_id, cell):
     with engine.begin() as conn:
+        lock_game(conn, game_id)
         ship_number = conn.execute(
             select(ship_cells.c.ship_number).where(
                 ship_cells.c.game_id == game_id, ship_cells.c.cell == cell
@@ -112,19 +133,27 @@ def hit_own_fleet(game_id, cell):
     return "killed" if alive == 0 else "hit"
 
 
-def load_shots(game_id):
-    query = select(shots.c.cell, shots.c.result).where(shots.c.game_id == game_id).order_by(shots.c.id)
-    with engine.connect() as conn:
-        return list(conn.execute(query))
-
-
-def save_shot(game_id, cell):
+def save_next_shot(game_id, pick_cell):
     with engine.begin() as conn:
+        lock_game(conn, game_id)
+        history = list(
+            conn.execute(
+                select(shots.c.cell, shots.c.result)
+                .where(shots.c.game_id == game_id)
+                .order_by(shots.c.id)
+            )
+        )
+        if any(result is None for _, result in history):
+            return None
+
+        cell = pick_cell(history)
         conn.execute(insert(shots).values(game_id=game_id, cell=cell))
+    return cell
 
 
 def save_shot_result(game_id, result):
     with engine.begin() as conn:
+        lock_game(conn, game_id)
         pending = conn.execute(
             select(shots.c.id).where(shots.c.game_id == game_id, shots.c.result.is_(None))
         ).scalar()
@@ -132,6 +161,19 @@ def save_shot_result(game_id, result):
             return False
         conn.execute(update(shots).where(shots.c.id == pending).values(result=result))
     return True
+
+
+def close_game(game_id):
+    with engine.begin() as conn:
+        status = lock_game(conn, game_id)
+        if status is None:
+            return "unknown"
+        if status != "open":
+            return "closed already"
+
+        conn.execute(update(games).where(games.c.id == game_id).values(status="closed"))
+    return "closed"
+
 
 
 def remove_game(game_id):

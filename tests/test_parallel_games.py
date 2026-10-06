@@ -8,7 +8,6 @@ GAMES = 10
 
 
 def play(api):
-    """Короткая партия: старт, выстрел противника по одной палубе, свой выстрел, закрытие."""
     body = api.post("/game").json()
     session_id = body["session_id"]
     single_deck = next(ship["coordinates"][0] for ship in body["ships"] if len(ship["coordinates"]) == 1)

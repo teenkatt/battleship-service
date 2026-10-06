@@ -2,6 +2,8 @@ import uuid
 
 import pytest
 
+from battleship.storage import SessionFinished, hit_own_fleet
+
 
 def close(api, session_id):
     return api.post(f"/game/{session_id}/close")
@@ -44,3 +46,10 @@ def test_closing_one_session_does_not_touch_another(api, game, created_games):
     close(api, game["session_id"])
 
     assert api.post(f"/game/{other['session_id']}/shot").status_code == 200
+
+
+def test_closed_session_is_refused_inside_the_transaction(api, game):
+    close(api, game["session_id"])
+
+    with pytest.raises(SessionFinished):
+        hit_own_fleet(uuid.UUID(game["session_id"]), "A1")

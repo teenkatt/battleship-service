@@ -98,15 +98,23 @@ def game_status(game_id):
         return conn.execute(select(games.c.status).where(games.c.id == game_id)).scalar()
 
 
+class SessionFinished(Exception):
+    pass
+
+
 def lock_game(conn, game_id):
-    """Занимает сессию до конца транзакции: параллельные запросы одной партии идут по очереди."""
     query = select(games.c.status).where(games.c.id == game_id).with_for_update()
     return conn.execute(query).scalar()
 
 
+def lock_open_game(conn, game_id):
+    if lock_game(conn, game_id) != "open":
+        raise SessionFinished
+
+
 def hit_own_fleet(game_id, cell):
     with engine.begin() as conn:
-        lock_game(conn, game_id)
+        lock_open_game(conn, game_id)
         ship_number = conn.execute(
             select(ship_cells.c.ship_number).where(
                 ship_cells.c.game_id == game_id, ship_cells.c.cell == cell
@@ -135,7 +143,7 @@ def hit_own_fleet(game_id, cell):
 
 def save_next_shot(game_id, pick_cell):
     with engine.begin() as conn:
-        lock_game(conn, game_id)
+        lock_open_game(conn, game_id)
         history = list(
             conn.execute(
                 select(shots.c.cell, shots.c.result)
@@ -153,7 +161,7 @@ def save_next_shot(game_id, pick_cell):
 
 def save_shot_result(game_id, result):
     with engine.begin() as conn:
-        lock_game(conn, game_id)
+        lock_open_game(conn, game_id)
         pending = conn.execute(
             select(shots.c.id).where(shots.c.game_id == game_id, shots.c.result.is_(None))
         ).scalar()
@@ -173,7 +181,6 @@ def close_game(game_id):
 
         conn.execute(update(games).where(games.c.id == game_id).values(status="closed"))
     return "closed"
-
 
 
 def remove_game(game_id):
